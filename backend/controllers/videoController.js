@@ -1,56 +1,89 @@
-const Video = require('../models/video');
-const multer = require('multer');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-const path = require('path');
+import { createError } from "../error.js";
+import User from "../models/User.js";
+import Video from "../models/Video.js";
 
-// Create an S3 client instance
-const s3 = new S3Client({
-  region: process.env.AWS_REGION, // specify your region, e.g., 'us-east-1'
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  },
-});
-
-// Set up multer memory storage
-const storage = multer.memoryStorage();
-const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
-
-// Video upload function
-exports.uploadVideo = async (req, res) => {
-  const { title, description, tags } = req.body;
-  const file = req.file;
-
-  // Create the S3 upload parameters
-  const params = {
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: `${Date.now()}-${file.originalname}`, // File name with timestamp to avoid collisions
-    Body: file.buffer, // Video content
-    ContentType: 'video/mp4', // MIME type
-  };
-
+export const addVideo = async (req, res, next) => {
+  const newVideo = new Video({ userId: req.user.id, ...req.body });
   try {
-    // Upload video to S3
-    const uploadResult = await s3.send(new PutObjectCommand(params));
-
-    // Create new video document in MongoDB
-    const video = new Video({
-      title,
-      description,
-      tags: tags.split(','),
-      videoUrl: `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`, // URL of the uploaded video
-      user: req.user._id, // Assuming you have user data in req.user
-    });
-
-    await video.save();
-
-    // Respond with the video details
-    res.json(video);
+    const savedVideo = await newVideo.save();
+    res.status(200).json(savedVideo);
   } catch (err) {
-    console.error('S3 Upload Error:', err);
-    res.status(500).json({ error: 'Server error' });
+    next(err);
+  }
+};
+export const updateVideo = async (req, res, next) => {
+  try {
+    const video = await Video.findById(req.params.id);
+    if (!video) return next(createError(404, "Video not found!"));
+
+    if (req.user.id === video.userId) {
+      const updatedVideo = await Video.findByIdAndUpdate(
+        req.params.id,
+        { $set: req.body },
+        { new: true }
+      );
+      res.status(200).json(updatedVideo);
+    } else return next(createError(403, "You can update only your video!"));
+  } catch (err) {
+    next(err);
+  }
+};
+export const deleteVideo = async (req, res, next) => {
+  try {
+    const video = await Video.findById(req.params.id);
+    if (!video) return next(createError(404, "Video not found!"));
+
+    if (req.user.id === video.userId) {
+      await Video.findByIdAndDelete(req.params.id);
+      res.status(200).json("The video has been deleted");
+    } else return next(createError(403, "You can delete only your video!"));
+  } catch (err) {
+    next(err);
+  }
+};
+export const getVideo = async (req, res, next) => {
+  try {
+    const video = await Video.findById(req.params.id);
+    res.status(200).json(video);
+  } catch (err) {
+    next(err);
+  }
+};
+export const addView = async (req, res, next) => {
+  try {
+    await Video.findByIdAndUpdate(req.params.id, {
+      $inc: { views: 1 },
+    });
+    res.status(200).json("The view has been increase");
+  } catch (err) {
+    next(err);
   }
 };
 
-// Export the upload middleware
-exports.upload = upload.single('video');
+
+
+
+
+
+export const getByTag = async (req, res, next) => {
+  const tags = req.query.tags.split(",");
+  console.log(tags);
+  try {
+    const videos = await Video.find({ tags: { $in: tags } }).limit(20);
+    res.status(200).json(videos);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const search = async (req, res, next) => {
+  const query = req.query.q;
+  try {
+    const videos = await Video.find({
+      title: { $regex: query, $options: "i " },
+    }).limit(40);
+    res.status(200).json(videos);
+  } catch (err) {
+    next(err);
+  }
+};
